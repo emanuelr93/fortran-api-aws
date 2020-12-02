@@ -1,21 +1,54 @@
-FROM nginx:1.19.1
+# Define global args
+ARG FUNCTION_DIR="/home/app/"
+ARG RUNTIME_VERSION="3.9"
+ARG DISTRO_VERSION="3.12"
 
-RUN apt-get update && \
-    apt-get install -y fcgiwrap gfortran
+# Stage 1 - bundle base image + runtime
+FROM python:${RUNTIME_VERSION}-alpine${DISTRO_VERSION} AS python-alpine
+RUN apk add --no-cache \
+    libstdc++ \
+    libgfortran
 
-# Fix fcgi-wrap executable bit.
-RUN sed -i 's/www-data/nginx/' /etc/init.d/fcgiwrap
-COPY conf/default.conf /etc/nginx/conf.d/default.conf
 
+# Stage 2 - build function and dependencies
+FROM python-alpine AS build-image
+# Install aws-lambda-cpp build dependencies
+RUN apk add --no-cache \
+    build-base \
+    libtool \
+    autoconf \
+    automake \
+    libexecinfo-dev \
+    make \
+    cmake \
+    libcurl \
+    gfortran
+# Include global args in this stage of the build
+ARG FUNCTION_DIR
+ARG RUNTIME_VERSION
+# Create function directory
+RUN mkdir -p ${FUNCTION_DIR}
+# Copy handler function
+COPY app/* ${FUNCTION_DIR}
 # Copy and compile source code.
-COPY fortran /fortran
-RUN cd /fortran && \
+COPY fortran ${FUNCTION_DIR}
+RUN cd ${FUNCTION_DIR} && \
     for file in $(ls *.f); do gfortran -o "${file%.*}" $file; done
 
-COPY cgi-bin /usr/share/nginx/html/cgi-bin/
+RUN python${RUNTIME_VERSION} -m pip install awslambdaric --target ${FUNCTION_DIR}
 
-# Add executable bit.
-RUN chmod -R +x /usr/share/nginx/html/cgi-bin/
+# Stage 3 - final runtime image
+# Grab a fresh copy of the Python image
+FROM python-alpine
 
-CMD /etc/init.d/fcgiwrap start \
-    && nginx -g 'daemon off;'
+ARG FUNCTION_DIR
+
+WORKDIR ${FUNCTION_DIR}
+
+COPY --from=build-image ${FUNCTION_DIR} ${FUNCTION_DIR}
+
+ADD https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie /usr/bin/aws-lambda-rie
+RUN chmod 755 /usr/bin/aws-lambda-rie
+COPY entry.sh /
+ENTRYPOINT [ "/entry.sh" ]
+CMD [ "app.handler" ]

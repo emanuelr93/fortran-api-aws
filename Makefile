@@ -1,11 +1,14 @@
 all: build run
 
 build:
-	docker build -t sparkfabrik/fortran-cgi .
+	docker build -t aws-demo/fortran-serverless .
 
-run: build
-	docker rm -vf fcgi || true
-	docker run -e DNSDOCK_ALIAS=fortran.api.loc -d --name fcgi -v $$PWD/cgi-bin:/usr/share/nginx/html/cgi-bin sparkfabrik/fortran-cgi
+run:
+	docker rm -vf fortran-lambda || true
+	docker run -p 9000:8080 -d --name fortran-lambda aws-demo/fortran-serverless
 
 exec:
-	docker exec -it fcgi bash
+	docker exec -it fortran-lambda sh
+
+logs:
+	docker logs -f fortran-lambda
